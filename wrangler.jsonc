@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "piccolo",
+  "name": "piccolo-test",
   "main": "src/worker.js",
   "compatibility_date": "2025-09-01",
   "assets": {
@@ -12,7 +12,7 @@
     {
       "binding": "DB",
       "database_name": "piccolo-db",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "23ac1eca-5155-4185-9f6f-335cab22858e",
       "migrations_dir": "migrations"
     }
   ],

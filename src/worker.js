@@ -3,7 +3,15 @@
 
 const SESSION_COOKIE = "piccolo_session";
 const SESSION_DAYS = 7;
-const AI_MODEL = "@cf/meta/llama-3.1-8b-instruct";
+// Tried in order; a retired or unavailable model is skipped and the next one is used.
+// To force a specific model without editing code, set AI_MODEL (e.g. `npx wrangler secret put AI_MODEL`).
+// Current models: https://developers.cloudflare.com/workers-ai/models/
+const AI_MODELS = [
+  "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "@cf/meta/llama-4-scout-17b-16e-instruct",
+  "@cf/mistralai/mistral-small-3.1-24b-instruct",
+  "@cf/google/gemma-3-12b-it",
+];
 const HOLD_DAYS = 7;
 const ARCHIVE_DAYS = 14;
 
@@ -495,31 +503,43 @@ async function writeReview(env, { restaurant, notes, praised }) {
   const facts = [praised.length ? `Things the guest praised: ${praised.join(", ")}.` : "", notes ? `Manager's notes of what the guest said: "${notes}"` : ""]
     .filter(Boolean)
     .join("\n");
-  if (env.AI) {
+  if (!env.AI) console.warn("AI binding missing: check \"ai\" in wrangler.jsonc");
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You write short, honest Google reviews in the first person, as the restaurant guest. " +
+        "Use ONLY the facts provided. Never invent dishes, names, prices, or events that are not in the facts. " +
+        "Write 3 to 5 natural sentences in plain, warm language. No hashtags, no emojis, no star ratings, no title, no quotation marks. " +
+        "Output only the review text.",
+    },
+    { role: "user", content: `Restaurant: ${restaurant}\n${facts}\n\nWrite the review.` },
+  ];
+  const models = env.AI_MODEL ? [env.AI_MODEL, ...AI_MODELS] : AI_MODELS;
+  for (const model of env.AI ? models : []) {
     try {
-      const out = await env.AI.run(AI_MODEL, {
-        messages: [
-          {
-            role: "system",
-            content:
-              "You write short, honest Google reviews in the first person, as the restaurant guest. " +
-              "Use ONLY the facts provided. Never invent dishes, names, prices, or events that are not in the facts. " +
-              "Write 3 to 5 natural sentences in plain, warm language. No hashtags, no emojis, no star ratings, no title, no quotation marks. " +
-              "Output only the review text.",
-          },
-          { role: "user", content: `Restaurant: ${restaurant}\n${facts}\n\nWrite the review.` },
-        ],
-        max_tokens: 260,
-        temperature: 0.6,
-      });
-      let text = (out?.response || "").trim().replace(/^["“]|["”]$/g, "").trim();
+      const out = await env.AI.run(model, { messages, max_tokens: 260, temperature: 0.6 });
+      let text = extractText(out).trim().replace(/^["“]|["”]$/g, "").trim();
       text = text.replace(/^(here('| i)s (the|your|a) review:?\s*)/i, "").trim();
       if (text.length >= 40) return { text: text.slice(0, 2000), source: "ai" };
+      console.warn(`AI model ${model} returned too little text:`, JSON.stringify(out).slice(0, 300));
     } catch (e) {
-      console.warn("AI draft failed, using template", e?.message);
+      console.warn(`AI model ${model} failed:`, e?.message || String(e));
     }
   }
   return { text: templateReview(restaurant, notes, praised), source: "template" };
+}
+
+// Workers AI models answer in a few shapes; read whichever one came back.
+function extractText(out) {
+  if (!out) return "";
+  if (typeof out === "string") return out;
+  if (typeof out.response === "string") return out.response;
+  if (out.response && typeof out.response === "object") return extractText(out.response);
+  if (out.result) return extractText(out.result);
+  const c = out.choices?.[0];
+  if (c) return c.message?.content || c.text || "";
+  return "";
 }
 
 // Fallback so the demo never stalls if the AI service is unavailable.
